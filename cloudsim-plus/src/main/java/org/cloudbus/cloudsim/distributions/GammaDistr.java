@@ -21,6 +21,9 @@ import org.apache.commons.math3.random.RandomGenerator;
  * @since CloudSim Toolkit 1.0
  */
 public class GammaDistr extends GammaDistribution implements ContinuousDistribution {
+    /** @see #isApplyAntitheticVariates() */
+    private boolean applyAntitheticVariates;
+
     private long seed;
 
     /**
@@ -37,7 +40,7 @@ public class GammaDistr extends GammaDistribution implements ContinuousDistribut
      * @see #GammaDistr(int, double, long, RandomGenerator)
      */
     public GammaDistr(final int shape, final double scale) {
-        this(shape, scale, ContinuousDistribution.defaultSeed());
+        this(shape, scale, StatisticalDistribution.defaultSeed());
     }
 
     /**
@@ -55,7 +58,7 @@ public class GammaDistr extends GammaDistribution implements ContinuousDistribut
      * @see #GammaDistr(int, double, long, RandomGenerator)
      */
     public GammaDistr(final int shape, final double scale, final long seed) {
-        this(shape, scale, seed, ContinuousDistribution.newDefaultGen(seed));
+        this(shape, scale, seed, StatisticalDistribution.newDefaultGen(seed));
     }
 
     /**
@@ -80,5 +83,21 @@ public class GammaDistr extends GammaDistribution implements ContinuousDistribut
     public void reseedRandomGenerator(final long seed) {
         super.reseedRandomGenerator(seed);
         this.seed = seed;
+    }
+
+    @Override
+    public boolean isApplyAntitheticVariates() {
+        return applyAntitheticVariates;
+    }
+
+    @Override
+    public GammaDistr setApplyAntitheticVariates(final boolean applyAntitheticVariates) {
+        this.applyAntitheticVariates = applyAntitheticVariates;
+        return this;
+    }
+
+    @Override
+    public double originalSample() {
+        return super.sample();
     }
 }

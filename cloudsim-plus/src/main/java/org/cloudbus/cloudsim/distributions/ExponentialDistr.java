@@ -21,6 +21,8 @@ import org.apache.commons.math3.random.RandomGenerator;
  * @since CloudSim Toolkit 1.0
  */
 public class ExponentialDistr extends ExponentialDistribution implements ContinuousDistribution {
+    /** @see #isApplyAntitheticVariates() */
+    private boolean applyAntitheticVariates;
     private long seed;
 
     /**
@@ -35,7 +37,7 @@ public class ExponentialDistr extends ExponentialDistribution implements Continu
      * @see #ExponentialDistr(double, long, RandomGenerator)
      */
     public ExponentialDistr(final double mean) {
-        this(mean, ContinuousDistribution.defaultSeed());
+        this(mean, StatisticalDistribution.defaultSeed());
     }
 
     /**
@@ -52,7 +54,7 @@ public class ExponentialDistr extends ExponentialDistribution implements Continu
      * @see #ExponentialDistr(double, long, RandomGenerator)
      */
     public ExponentialDistr(final double mean, final long seed) {
-        this(mean, seed, ContinuousDistribution.newDefaultGen(seed));
+        this(mean, seed, StatisticalDistribution.newDefaultGen(seed));
     }
 
     /**
@@ -79,5 +81,21 @@ public class ExponentialDistr extends ExponentialDistribution implements Continu
     public void reseedRandomGenerator(final long seed) {
         super.reseedRandomGenerator(seed);
         this.seed = seed;
+    }
+
+    @Override
+    public boolean isApplyAntitheticVariates() {
+        return applyAntitheticVariates;
+    }
+
+    @Override
+    public ExponentialDistr setApplyAntitheticVariates(final boolean applyAntitheticVariates) {
+        this.applyAntitheticVariates = applyAntitheticVariates;
+        return this;
+    }
+
+    @Override
+    public double originalSample() {
+        return super.sample();
     }
 }

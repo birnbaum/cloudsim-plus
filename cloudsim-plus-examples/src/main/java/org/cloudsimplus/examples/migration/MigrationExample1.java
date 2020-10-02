@@ -23,6 +23,8 @@
  */
 package org.cloudsimplus.examples.migration;
 
+import ch.qos.logback.classic.Level;
+import org.cloudbus.cloudsim.allocationpolicies.VmAllocationPolicy;
 import org.cloudbus.cloudsim.allocationpolicies.migration.VmAllocationPolicyMigrationBestFitStaticThreshold;
 import org.cloudbus.cloudsim.allocationpolicies.migration.VmAllocationPolicyMigrationStaticThreshold;
 import org.cloudbus.cloudsim.brokers.DatacenterBroker;
@@ -49,6 +51,9 @@ import org.cloudbus.cloudsim.vms.VmSimple;
 import org.cloudsimplus.builders.tables.CloudletsTableBuilder;
 import org.cloudsimplus.builders.tables.HostHistoryTableBuilder;
 import org.cloudsimplus.listeners.DatacenterBrokerEventInfo;
+import org.cloudsimplus.listeners.EventListener;
+import org.cloudsimplus.listeners.VmHostEventInfo;
+import org.cloudsimplus.util.Log;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -116,12 +121,21 @@ public final class MigrationExample1 {
      * @see Datacenter#getSchedulingInterval()
      */
     private static final int  SCHEDULING_INTERVAL = 1;
-    private static final int  HOSTS = 5;
-    private static final int  VMS = 3;
-    private static final int  HOST_MIPS = 1000; //for each PE
-    private static final int  HOST_INITIAL_PES = 4;
-    private static final long HOST_RAM = 500000; //host memory (MB)
-    private static final long HOST_STORAGE = 1000000; //host storage
+
+    /**
+     * The percentage of host CPU usage that trigger VM migration
+     * due to under utilization (in scale from 0 to 1, where 1 is 100%).
+     */
+    private static final double HOST_UNDER_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION = 0.1;
+
+    /**
+     * The percentage of host CPU usage that trigger VM migration
+     * due to over utilization (in scale from 0 to 1, where 1 is 100%).
+     */
+    private static final double HOST_OVER_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION = 0.7;
+
+    /** @see Datacenter#setHostSearchRetryDelay(double) */
+    private static final int HOST_SEARCH_RETRY_DELAY = 60;
 
     /**
      * The time spent during VM migration depend on the
@@ -138,24 +152,25 @@ public final class MigrationExample1 {
      * Since VMs in this example are created with 2000 MB of RAM, any migration
      * will take 2 seconds to finish, as can be seen in the logs.
      */
-    private static final long   HOST_BW = 16000L; //Mb/s
+    private static final long   HOST_BW = 16_000L; //Mb/s
+
+    private static final int    HOST_MIPS = 1000; //for each PE
+    private static final long   HOST_RAM[] = {15_000, 500_000, 25_000}; //host memory (MB)
+    private static final long   HOST_STORAGE = 1_000_000; //host storage
 
     /**
-     * The percentage of host CPU usage that trigger VM migration
-     * due to over utilization (in scale from 0 to 1, where 1 is 100%).
+     * An array where each item defines the number of PEs for each Host to be created.
+     * The length of the array represents the number of Hosts.
      */
-    private static final double HOST_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION = 0.7;
+    private static final int    HOST_PES[] = {4, 5, 5};
 
-    /** @see Datacenter#setHostSearchRetryDelay(double) */
-    private static final int HOST_SEARCH_RETRY_DELAY = 60;
-
+    private static final int    VM_PES[]   = {2, 2, 2, 1};
     private static final int    VM_MIPS = 1000; //for each PE
     private static final long   VM_SIZE = 1000; //image size (MB)
-    private static final int    VM_RAM = 10000; //VM memory (MB)
-    private static final double VM_BW = HOST_BW/(double)VMS;
-    private static final int    VM_PES = 2;
+    private static final int    VM_RAM = 10_000; //VM memory (MB)
+    private static final double VM_BW = HOST_BW/(double)VM_PES.length;
 
-    private static final long   CLOUDLET_LENGHT = 20000;
+    private static final long   CLOUDLET_LENGTH = 20_000;
     private static final long   CLOUDLET_FILESIZE = 300;
     private static final long   CLOUDLET_OUTPUTSIZE = 300;
 
@@ -185,6 +200,7 @@ public final class MigrationExample1 {
     private CloudSim simulation;
     private VmAllocationPolicyMigrationStaticThreshold allocationPolicy;
     private List<Host> hostList;
+    private int migrationsNumber = 0;
 
     /**
      * Starts the example.
@@ -200,12 +216,18 @@ public final class MigrationExample1 {
           Make sure to import org.cloudsimplus.util.Log;*/
         //Log.setLevel(ch.qos.logback.classic.Level.WARN);
 
+        if(HOST_PES.length != HOST_RAM.length){
+            throw new IllegalStateException("The length of arrays HOST_PES and HOST_RAM must match.");
+        }
+
         System.out.println("Starting " + getClass().getSimpleName());
         simulation = new CloudSim();
+        Log.setLevel(CloudSim.LOGGER, Level.WARN);
 
         @SuppressWarnings("unused")
         Datacenter datacenter0 = createDatacenter();
         broker = new DatacenterBrokerSimple(simulation);
+        Log.setLevel(DatacenterBroker.LOGGER, Level.WARN);
         createAndSubmitVms(broker);
         createAndSubmitCloudlets(broker);
 
@@ -221,7 +243,72 @@ public final class MigrationExample1 {
         System.out.printf("%nHosts CPU usage History (when the allocated MIPS is lower than the requested, it is due to VM migration overhead)%n");
 
         hostList.stream().filter(h -> h.getId() <= 2).forEach(this::printHostHistory);
+        System.out.printf("Number of VM migrations: %d%n", migrationsNumber);
         System.out.println(getClass().getSimpleName() + " finished!");
+    }
+
+    /**
+     * A listener method that is called when a VM migration starts.
+     * @param info information about the happened event
+     *
+     * @see #createAndSubmitVms(DatacenterBroker)
+     * @see Vm#addOnMigrationFinishListener(EventListener)
+     */
+    private void startMigration(final VmHostEventInfo info) {
+        final Vm vm = info.getVm();
+        final Host targetHost = info.getHost();
+        System.out.printf(
+            "# %.2f: %s started migrating to %s (you can perform any operation you want here)%n",
+            info.getTime(), vm, targetHost);
+        showVmAllocatedMips(vm, targetHost, info.getTime());
+        //VM current host (source)
+        showHostAllocatedMips(info.getTime(), vm.getHost());
+        //Migration host (target)
+        showHostAllocatedMips(info.getTime(), targetHost);
+        System.out.println();
+
+        migrationsNumber++;
+        if(migrationsNumber > 1){
+            return;
+        }
+
+        //After the first VM starts being migrated, tracks some metrics along simulation time
+        simulation.addOnClockTickListener(clock -> {
+            if (clock.getTime() <= 2 || (clock.getTime() >= 11 && clock.getTime() <= 15))
+                showVmAllocatedMips(vm, targetHost, clock.getTime());
+        });
+    }
+
+    private void showVmAllocatedMips(Vm vm, Host targetHost, final double time) {
+        final String msg = String.format("# %.2f: %s in %s: total allocated", time, vm, targetHost);
+        final List<Double> allocatedMips = targetHost.getVmScheduler().getAllocatedMips(vm);
+        final double totalMips = allocatedMips.stream().findFirst().orElse(0.0) * allocatedMips.size();
+        final String msg2 = totalMips == VM_MIPS * 0.9 ? " - reduction due to migration overhead" : "";
+        System.out.printf("%s %.0f MIPs (divided by %d PEs)%s\n", msg, totalMips, allocatedMips.size(), msg2);
+    }
+
+    /**
+     * A listener method that is called when a VM migration finishes.
+     * @param info information about the happened event
+     *
+     * @see #createAndSubmitVms(DatacenterBroker)
+     * @see Vm#addOnMigrationStartListener(EventListener)
+     */
+    private void finishMigration(final VmHostEventInfo info) {
+        final Host host = info.getHost();
+        System.out.printf(
+            "# %.2f: %s finished migrating to %s (you can perform any operation you want here)%n",
+            info.getTime(), info.getVm(), host);
+        System.out.print("\t\t");
+        showHostAllocatedMips(info.getTime(), hostList.get(1));
+        System.out.print("\t\t");
+        showHostAllocatedMips(info.getTime(), host);
+    }
+
+    private void showHostAllocatedMips(final double time, final Host host) {
+        System.out.printf(
+            "%.2f: %s allocated %.2f MIPS from %.2f total capacity%n",
+            time, host, host.getTotalAllocatedMips(), host.getTotalMipsCapacity());
     }
 
     private void printHostHistory(Host host) {
@@ -229,7 +316,7 @@ public final class MigrationExample1 {
     }
 
     public void createAndSubmitCloudlets(DatacenterBroker broker) {
-        final List<Cloudlet> list = new ArrayList<>(VMS);
+        final List<Cloudlet> list = new ArrayList<>(VM_PES.length);
         Cloudlet cloudlet = Cloudlet.NULL;
         UtilizationModelDynamic um = createCpuUtilizationModel(CLOUDLET_INITIAL_CPU_PERCENTAGE, 1);
         for(Vm vm: vmList){
@@ -255,7 +342,7 @@ public final class MigrationExample1 {
         final UtilizationModel utilizationModelFull = new UtilizationModelFull();
 
         final Cloudlet cloudlet =
-            new CloudletSimple(CLOUDLET_LENGHT, (int)vm.getNumberOfPes())
+            new CloudletSimple(CLOUDLET_LENGTH, (int)vm.getNumberOfPes())
                 .setFileSize(CLOUDLET_FILESIZE)
                 .setOutputSize(CLOUDLET_OUTPUTSIZE)
                 .setUtilizationModelRam(utilizationModelFull)
@@ -267,44 +354,31 @@ public final class MigrationExample1 {
     }
 
     public void createAndSubmitVms(DatacenterBroker broker) {
-        List<Vm> list = new ArrayList<>(VMS);
-        for(int i = 0; i < VMS; i++){
-            Vm vm = createVm(broker, VM_PES);
-            list.add(vm);
+        final List<Vm> list = new ArrayList<>(VM_PES.length);
+        for (final int pes : VM_PES) {
+            list.add(createVm(pes));
         }
 
         vmList.addAll(list);
         broker.submitVmList(list);
+
+        list.forEach(vm -> vm.addOnMigrationStartListener(this::startMigration));
+        list.forEach(vm -> vm.addOnMigrationFinishListener(this::finishMigration));
     }
 
-    public Vm createVm(DatacenterBroker broker, int pes) {
+    public Vm createVm(final int pes) {
         Vm vm = new VmSimple(VM_MIPS, pes);
         vm
-          .setRam(VM_RAM).setBw((long)VM_BW).setSize(VM_SIZE)
-          .setCloudletScheduler(new CloudletSchedulerTimeShared());
+            .setRam(VM_RAM).setBw((long)VM_BW).setSize(VM_SIZE)
+            .setCloudletScheduler(new CloudletSchedulerTimeShared());
         return vm;
-    }
-
-    /**
-     * Creates a CPU UtilizationModel for a Cloudlet
-     * which will always use the given initial CPU usage percentage.
-     * This way, the usage will not change over the time,
-     * since the max usage will be the initial usage.
-     *
-     * @param initialCpuUsagePercent the percentage of CPU utilization
-     * that created Cloudlets will use when they start to execute.
-     * If this value is greater than 1 (100%), it will be changed to 1.
-     * @return
-     */
-    private UtilizationModelDynamic createCpuUtilizationModel(double initialCpuUsagePercent) {
-        return createCpuUtilizationModel(initialCpuUsagePercent, initialCpuUsagePercent);
     }
 
     /**
      * Creates a CPU UtilizationModel for a Cloudlet.
      * If the initial usage is lower than the max usage, the usage will
      * be dynamically incremented along the time, according to the
-     * {@link #getCpuUsageIncrement(org.cloudbus.cloudsim.utilizationmodels.UtilizationModelDynamic)}
+     * {@link #getCpuUsageIncrement(UtilizationModelDynamic)}
      * function. Otherwise, the CPU usage will be static, according to the
      * defined initial usage.
      *
@@ -327,7 +401,7 @@ public final class MigrationExample1 {
         UtilizationModelDynamic um;
         if (initialCpuUsagePercent < maxCpuUsagePercentage) {
             um = new UtilizationModelDynamic(initialCpuUsagePercent)
-                        .setUtilizationUpdateFunction(this::getCpuUsageIncrement);
+                .setUtilizationUpdateFunction(this::getCpuUsageIncrement);
         } else {
             um = new UtilizationModelDynamic(initialCpuUsagePercent);
         }
@@ -345,23 +419,24 @@ public final class MigrationExample1 {
     }
 
     /**
-     * Creates a Datacenter with number of Hosts defined by {@link #HOSTS},
+     * Creates a Datacenter with number of Hosts defined by the length of {@link #HOST_PES},
      * but only some of these Hosts will be active (powered on) initially.
      *
      * @return
      */
     private Datacenter createDatacenter() {
-        this.hostList = new ArrayList<>();
-        for(int i = 0; i < HOSTS; i++){
-            final int pes = HOST_INITIAL_PES + i;
-            Host host = createHost(pes, HOST_MIPS);
+        this.hostList = new ArrayList<>(HOST_PES.length);
+        for (int i = 0; i < HOST_PES.length; i++) {
+            final int pes = HOST_PES[i];
+            final long ram = HOST_RAM[i];
+            Host host = createHost(pes, HOST_MIPS, ram);
             hostList.add(host);
         }
         System.out.println();
 
         /**
          * Sets an upper utilization threshold higher than the
-         * {@link #HOST_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION}
+         * {@link #HOST_OVER_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION}
          * to enable placing VMs which will use more CPU than
          * defined by the value in the mentioned constant.
          * After VMs are all submitted to Hosts, the threshold is changed
@@ -372,24 +447,31 @@ public final class MigrationExample1 {
         this.allocationPolicy =
             new VmAllocationPolicyMigrationBestFitStaticThreshold(
                 new VmSelectionPolicyMinimumUtilization(),
-                HOST_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION+0.2);
+                HOST_OVER_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION +0.2);
+        Log.setLevel(VmAllocationPolicy.LOGGER, Level.WARN);
+        this.allocationPolicy.setUnderUtilizationThreshold(HOST_UNDER_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION);
 
         DatacenterSimple dc = new DatacenterSimple(simulation, hostList, allocationPolicy);
+        for (Host host : hostList) {
+            System.out.printf(
+                "# Created %s with %.0f MIPS x %d PEs (%.0f total MIPS)%n",
+                host, host.getMips(), host.getNumberOfPes(), host.getTotalMipsCapacity());
+        }
         dc.setSchedulingInterval(SCHEDULING_INTERVAL)
           .setHostSearchRetryDelay(HOST_SEARCH_RETRY_DELAY);
         return dc;
     }
 
-    public Host createHost(int numberOfPes, long mipsByPe) {
-            List<Pe> peList = createPeList(numberOfPes, mipsByPe);
-            Host host =
-                new HostSimple(HOST_RAM, HOST_BW, HOST_STORAGE, peList);
-            host
-                .setRamProvisioner(new ResourceProvisionerSimple())
-                .setBwProvisioner(new ResourceProvisionerSimple())
-                .setVmScheduler(new VmSchedulerTimeShared());
-            host.enableStateHistory();
-            return host;
+    public Host createHost(final int numberOfPes, final long mipsByPe, final long ram) {
+        List<Pe> peList = createPeList(numberOfPes, mipsByPe);
+        Host host =
+            new HostSimple(ram, HOST_BW, HOST_STORAGE, peList);
+        host
+            .setRamProvisioner(new ResourceProvisionerSimple())
+            .setBwProvisioner(new ResourceProvisionerSimple())
+            .setVmScheduler(new VmSchedulerTimeShared());
+        host.enableStateHistory();
+        return host;
     }
 
     public List<Pe> createPeList(int numberOfPEs, long mips) {
@@ -408,9 +490,14 @@ public final class MigrationExample1 {
      *
      * The listener is removed after finishing, so that it's called just once,
      * even if new VMs are submitted and created latter on.
-    */
-    private void onVmsCreatedListener(final DatacenterBrokerEventInfo evt) {
-        allocationPolicy.setOverUtilizationThreshold(HOST_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION);
-        broker.removeOnVmsCreatedListener(evt.getListener());
+     */
+    private void onVmsCreatedListener(final DatacenterBrokerEventInfo info) {
+        allocationPolicy.setOverUtilizationThreshold(HOST_OVER_UTILIZATION_THRESHOLD_FOR_VM_MIGRATION);
+        broker.removeOnVmsCreatedListener(info.getListener());
+        vmList.forEach(vm -> showVmAllocatedMips(vm, vm.getHost(), info.getTime()));
+
+        System.out.println();
+        hostList.forEach(host -> showHostAllocatedMips(info.getTime(), host));
+        System.out.println();
     }
 }

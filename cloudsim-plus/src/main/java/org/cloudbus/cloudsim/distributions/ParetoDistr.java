@@ -21,6 +21,8 @@ import org.apache.commons.math3.random.RandomGenerator;
  * @since CloudSim Toolkit 1.0
  */
 public class ParetoDistr extends ParetoDistribution implements ContinuousDistribution {
+    /** @see #isApplyAntitheticVariates() */
+    private boolean applyAntitheticVariates;
 
     private long seed;
 
@@ -38,7 +40,7 @@ public class ParetoDistr extends ParetoDistribution implements ContinuousDistrib
      * @see #ParetoDistr(double, double, long, RandomGenerator)
      */
     public ParetoDistr(final double shape, final double location) {
-        this(shape, location, ContinuousDistribution.defaultSeed());
+        this(shape, location, StatisticalDistribution.defaultSeed());
     }
 
     /**
@@ -56,7 +58,7 @@ public class ParetoDistr extends ParetoDistribution implements ContinuousDistrib
      * @see #ParetoDistr(double, double, long, RandomGenerator)
      */
     public ParetoDistr(final double shape, final double location, final long seed) {
-        this(shape, location, seed, ContinuousDistribution.newDefaultGen(seed));
+        this(shape, location, seed, StatisticalDistribution.newDefaultGen(seed));
     }
 
     /**
@@ -84,5 +86,21 @@ public class ParetoDistr extends ParetoDistribution implements ContinuousDistrib
     @Override
     public long getSeed() {
         return this.seed;
+    }
+
+    @Override
+    public boolean isApplyAntitheticVariates() {
+        return applyAntitheticVariates;
+    }
+
+    @Override
+    public ParetoDistr setApplyAntitheticVariates(final boolean applyAntitheticVariates) {
+        this.applyAntitheticVariates = applyAntitheticVariates;
+        return this;
+    }
+
+    @Override
+    public double originalSample() {
+        return super.sample();
     }
 }

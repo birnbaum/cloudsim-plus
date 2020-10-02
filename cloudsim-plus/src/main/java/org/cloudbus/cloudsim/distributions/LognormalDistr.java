@@ -19,6 +19,9 @@ import org.apache.commons.math3.random.RandomGenerator;
  * @since CloudSim Toolkit 1.0
  */
 public class LognormalDistr extends LogNormalDistribution implements ContinuousDistribution {
+    /** @see #isApplyAntitheticVariates() */
+    private boolean applyAntitheticVariates;
+
     private long seed;
 
     /**
@@ -28,7 +31,7 @@ public class LognormalDistr extends LogNormalDistribution implements ContinuousD
      * @param scale the scale parameter of this distribution
      */
     public LognormalDistr(final double shape, final double scale) {
-        this(shape, scale, ContinuousDistribution.defaultSeed());
+        this(shape, scale, StatisticalDistribution.defaultSeed());
     }
 
     /**
@@ -38,7 +41,7 @@ public class LognormalDistr extends LogNormalDistribution implements ContinuousD
      * @param seed the seed
      */
     public LognormalDistr(final double shape, final double scale, final long seed) {
-        this(shape, scale, seed, ContinuousDistribution.newDefaultGen(seed));
+        this(shape, scale, seed, StatisticalDistribution.newDefaultGen(seed));
     }
 
     /**
@@ -64,5 +67,22 @@ public class LognormalDistr extends LogNormalDistribution implements ContinuousD
     @Override
     public long getSeed() {
         return seed;
+    }
+
+
+    @Override
+    public boolean isApplyAntitheticVariates() {
+        return applyAntitheticVariates;
+    }
+
+    @Override
+    public LognormalDistr setApplyAntitheticVariates(final boolean applyAntitheticVariates) {
+        this.applyAntitheticVariates = applyAntitheticVariates;
+        return this;
+    }
+
+    @Override
+    public double originalSample() {
+        return super.sample();
     }
 }
